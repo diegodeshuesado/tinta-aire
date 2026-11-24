@@ -13,12 +13,18 @@
   video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover;
     transform: scaleX(-1); filter: saturate(.8) brightness(1.08) contrast(.95); }
   video.hidden { opacity: 0; }
-  #ink { position: absolute; inset: 0; width: 100%; height: 100%; }
+  #ink { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; -webkit-user-select: none; user-select: none; }
+  #menuBtn { position: fixed; right: 12px; top: 12px; z-index: 6; width: 34px; height: 34px; border-radius: 50%;
+    border: 1px solid rgba(255,255,255,.25); background: rgba(10,10,10,.25); color: rgba(255,255,255,.7);
+    font-size: 16px; line-height: 1; cursor: pointer; opacity: .35; transition: opacity .2s; }
+  #menuBtn:hover, #menuBtn.open { opacity: 1; }
+  #errBox { position: fixed; left: 12px; right: 12px; bottom: 12px; z-index: 20; background: rgba(120,20,20,.92); color: #fff;
+    font: 12px/1.4 ui-monospace, Menlo, monospace; padding: 8px 10px; border-radius: 6px; white-space: pre-wrap; }
   #hud { position: fixed; left: 16px; bottom: 14px; font-size: 12px; letter-spacing: .04em;
     background: rgba(10,10,10,.55); padding: 8px 12px; border-radius: 6px; line-height: 1.6;
     pointer-events: none; }
   #hud b { font-weight: 600; color: #fff; }
-  #tools { position: fixed; right: 14px; top: 14px; display: flex; gap: 6px; z-index: 5; }
+  #tools { position: fixed; right: 56px; top: 12px; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; z-index: 5; }
   button { font: inherit; }
   #tools button, #panel button { background: rgba(10,10,10,.6); color: var(--paper); border: 1px solid rgba(255,255,255,.2);
     border-radius: 6px; padding: 6px 10px; font-size: 12px; cursor: pointer; }
@@ -60,6 +66,18 @@
   <canvas id="ink"></canvas>
 </div>
 
+<div id="errBox" hidden></div>
+<script>
+  // classic script: reports problems even if the module below never loads (e.g. old Safari)
+  window.__showErr = function (msg) {
+    var b = document.getElementById('errBox'); b.hidden = false;
+    b.textContent = (b.textContent ? b.textContent + '\n' : '') + msg;
+  };
+  window.addEventListener('error', function (e) { window.__showErr('Error: ' + (e.message || e.error)); });
+  window.addEventListener('unhandledrejection', function (e) { window.__showErr('Error: ' + (e.reason && e.reason.message || e.reason)); });
+  setTimeout(function () { if (!window.__tinta) window.__showErr('La app no cargó. Revisa la conexión o actualiza Safari / iPadOS.'); }, 12000);
+</script>
+<button id="menuBtn" hidden title="H" aria-label="Menú">&#8943;</button>
 <div id="tools" hidden>
   <button id="bStyle" title="S">Estilo: tinta</button>
   <button id="bCam" title="C">Ocultar cámara</button>
@@ -743,7 +761,8 @@ function frame(now) {
   const dt = Math.min(0.05, (now - lastT) / 1000); lastT = now; frameN++;
   if (landmarker && video.readyState >= 2 && video.currentTime !== lastVideoTime) {
     lastVideoTime = video.currentTime;
-    hands = processHands(landmarker.detectForVideo(video, now), now, dt);
+    try { hands = processHands(landmarker.detectForVideo(video, now), now, dt); }
+    catch (e) { if (!S.detErr) { S.detErr = true; window.__showErr('Detección de manos falló: ' + (e.message || e)); } }
   } else if (!landmarker) hands = [];
 
   S.angle += S.spinVel * dt;
@@ -789,9 +808,12 @@ const startBtn = document.getElementById('start');
 startBtn.onclick = async () => {
   startBtn.disabled = true;
   try {
-    initAudio();
+    try { initAudio(); if (A.ctx.state === 'suspended') A.ctx.resume(); }
+    catch (e) { window.__showErr('Audio no disponible: ' + (e.message || e)); }
     statusEl.textContent = 'Pidiendo acceso a la cámara...';
-    const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720, facingMode: 'user' }, audio: false });
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error('Este navegador no da acceso a la cámara (abre el link en Safari o Chrome, con https).');
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' }, audio: false });
+    video.setAttribute('playsinline', ''); video.muted = true;
     video.srcObject = stream; await video.play();
     statusEl.textContent = 'Cargando el modelo de manos...';
     const fileset = await FilesetResolver.forVisionTasks('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm');
@@ -800,10 +822,15 @@ startBtn.onclick = async () => {
       runningMode: 'VIDEO', numHands: 2,
       minHandDetectionConfidence: 0.5, minHandPresenceConfidence: 0.5, minTrackingConfidence: 0.5,
     });
-    try { landmarker = await HandLandmarker.createFromOptions(fileset, opts('GPU')); }
-    catch (e) { landmarker = await HandLandmarker.createFromOptions(fileset, opts('CPU')); }
+    // iPad/iPhone Safari is unreliable with the GPU delegate: use CPU there
+    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    if (isIOS) landmarker = await HandLandmarker.createFromOptions(fileset, opts('CPU'));
+    else {
+      try { landmarker = await HandLandmarker.createFromOptions(fileset, opts('GPU')); }
+      catch (e) { landmarker = await HandLandmarker.createFromOptions(fileset, opts('CPU')); }
+    }
     document.getElementById('intro').remove();
-    hud.hidden = false; document.getElementById('tools').hidden = false;
+    document.getElementById('menuBtn').hidden = false;   // clean screen: menus stay hidden until you tap the dots
   } catch (e) {
     console.error(e);
     statusEl.textContent = 'No se pudo iniciar: ' + (e.message || e);
@@ -830,11 +857,19 @@ bStyle.onclick = () => setStyle(S.style === 'ink' ? 'chrome' : 'ink');
 document.querySelectorAll('[data-style]').forEach(b => b.onclick = () => setStyle(b.dataset.style));
 document.getElementById('bMelt').onclick = melt;
 document.getElementById('bPanel').onclick = () => { panelEl.hidden = !panelEl.hidden; };
+const menuBtn = document.getElementById('menuBtn'), toolsEl = document.getElementById('tools');
+function toggleMenus() {
+  const show = toolsEl.hidden;
+  toolsEl.hidden = !show; hud.hidden = !show; menuBtn.classList.toggle('open', show);
+  if (!show) panelEl.hidden = true;
+}
+menuBtn.onclick = toggleMenus;
 addEventListener('keydown', e => {
   if (e.target.tagName === 'SELECT' || e.target.tagName === 'INPUT') return;
   const k = e.key.toLowerCase();
   if (k === 'x') melt(); else if (k === 'c') toggleCam(); else if (k === 'm') toggleMute();
   else if (k === 's') bStyle.click(); else if (k === 'p') panelEl.hidden = !panelEl.hidden;
+  else if (k === 'h' && !menuBtn.hidden) toggleMenus();
 });
 
 // mouse fallback: drag to draw, wheel to resize
