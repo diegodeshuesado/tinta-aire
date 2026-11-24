@@ -1,0 +1,851 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Tinta al aire</title>
+<style>
+  :root { --ink: #0b0b0c; --paper: #f3efe6; }
+  [hidden] { display: none !important; }
+  html, body { margin: 0; height: 100%; background: #111; overflow: hidden;
+    font-family: "Segoe UI", system-ui, sans-serif; color: var(--paper); }
+  #stage { position: fixed; inset: 0; }
+  video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover;
+    transform: scaleX(-1); filter: saturate(.8) brightness(1.08) contrast(.95); }
+  video.hidden { opacity: 0; }
+  #ink { position: absolute; inset: 0; width: 100%; height: 100%; }
+  #hud { position: fixed; left: 16px; bottom: 14px; font-size: 12px; letter-spacing: .04em;
+    background: rgba(10,10,10,.55); padding: 8px 12px; border-radius: 6px; line-height: 1.6;
+    pointer-events: none; }
+  #hud b { font-weight: 600; color: #fff; }
+  #tools { position: fixed; right: 14px; top: 14px; display: flex; gap: 6px; z-index: 5; }
+  button { font: inherit; }
+  #tools button, #panel button { background: rgba(10,10,10,.6); color: var(--paper); border: 1px solid rgba(255,255,255,.2);
+    border-radius: 6px; padding: 6px 10px; font-size: 12px; cursor: pointer; }
+  #tools button:hover, #panel button:hover { background: rgba(40,40,40,.85); }
+  #panel button.on { background: var(--paper); color: var(--ink); }
+  #panel { position: fixed; right: 14px; top: 54px; width: 300px; max-height: calc(100vh - 80px); overflow: auto;
+    background: rgba(12,12,12,.82); backdrop-filter: blur(8px); border: 1px solid rgba(255,255,255,.12);
+    border-radius: 8px; padding: 12px 14px; font-size: 12px; z-index: 5; }
+  #panel h3 { font-size: 11px; text-transform: uppercase; letter-spacing: .12em; color: #a9a395; margin: 14px 0 8px; font-weight: 600; }
+  #panel h3:first-child { margin-top: 0; }
+  #panel .row { display: grid; grid-template-columns: 78px 1fr 38px 46px; gap: 6px; align-items: center; margin: 5px 0; }
+  #panel .row input { width: 100%; accent-color: #d8cff8; }
+  #panel .cc { color: #a9a395; font-variant-numeric: tabular-nums; text-align: right; }
+  #panel .row button { padding: 3px 4px; font-size: 11px; }
+  #panel .row button.learning { background: #d8cff8; color: #111; }
+  #panel select { width: 100%; background: #1b1b1b; color: var(--paper); border: 1px solid rgba(255,255,255,.2); border-radius: 4px; padding: 4px; font: inherit; }
+  #panel label { display: grid; grid-template-columns: 60px 1fr; gap: 6px; align-items: center; margin: 6px 0; }
+  #panel .seg { display: flex; gap: 6px; }
+  #midiLog { color: #a9a395; min-height: 1.3em; margin-top: 6px; font-variant-numeric: tabular-nums; }
+  #panel p { color: #a9a395; margin: 6px 0; line-height: 1.45; }
+  #intro { position: fixed; inset: 0; display: grid; place-items: center; background: var(--paper);
+    color: var(--ink); z-index: 10; }
+  #intro .card { max-width: 540px; padding: 32px; }
+  #intro h1 { font-family: Georgia, "Times New Roman", serif; font-weight: 400; font-size: 44px;
+    margin: 0 0 6px; letter-spacing: -.01em; }
+  #intro p { margin: 0 0 18px; line-height: 1.5; color: #333; }
+  #intro ul { padding: 0; margin: 0 0 24px; list-style: none; }
+  #intro li { padding: 8px 0; border-top: 1px solid #d8d2c4; display: flex; gap: 14px; line-height: 1.4; }
+  #intro li span:first-child { min-width: 160px; font-weight: 600; }
+  #start { background: var(--ink); color: var(--paper); border: 0; padding: 12px 22px;
+    font-size: 15px; border-radius: 4px; cursor: pointer; }
+  #start:disabled { opacity: .5; cursor: wait; }
+  #status { margin-top: 12px; font-size: 13px; color: #6b5f4a; min-height: 1.2em; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <video id="cam" playsinline muted></video>
+  <canvas id="ink"></canvas>
+</div>
+
+<div id="tools" hidden>
+  <button id="bStyle" title="S">Estilo: tinta</button>
+  <button id="bCam" title="C">Ocultar cámara</button>
+  <button id="bMute" title="M">Silenciar</button>
+  <button id="bMelt" title="X">Derretir</button>
+  <button id="bPanel" title="P">MIDI / sonido</button>
+</div>
+
+<div id="panel" hidden>
+  <h3>Estilo</h3>
+  <div class="seg"><button data-style="ink" class="on">Tinta negra</button><button data-style="chrome">Cromo iridiscente</button></div>
+  <h3>MIDI</h3>
+  <button id="bMidi">Conectar MIDI</button>
+  <label>Entrada <select id="midiIn"><option value="all">Todas</option></select></label>
+  <label>Salida <select id="midiOut"><option value="">Ninguna</option></select></label>
+  <div id="midiLog"></div>
+  <p>Teclas del controlador cambian la tónica. Pitch bend dobla todas las voces. La salida manda una nota por trazo a tu DAW o synth.</p>
+  <h3>Sonido <span style="text-transform:none;letter-spacing:0">(Learn: pulsa y mueve una perilla)</span></h3>
+  <div id="params"></div>
+</div>
+<div id="hud" hidden></div>
+
+<div id="intro">
+  <div class="card">
+    <h1>Tinta al aire</h1>
+    <p>Pinta trazos en el espacio con la mano. Cada trazo es una voz.</p>
+    <ul>
+      <li><span>Pellizco pulgar + índice</span><span>Dibuja mientras los mantienes juntos. La altura da el tono, el movimiento lateral es el arco.</span></li>
+      <li><span>Índice apuntando, en círculos</span><span>La pintura orbita alrededor de ti, cada vez más rápido. El sonido gira con ella.</span></li>
+      <li><span>Mano en "C" quieta</span><span>Pulgar e índice abiertos, demás dedos doblados. Abre o cierra la C para hacerlo grande o pequeño. Abre la mano para soltar.</span></li>
+      <li><span>Brazos en X</span><span>Todo se derrite y el sonido se hunde. Lienzo nuevo.</span></li>
+    </ul>
+    <button id="start">Encender cámara y sonido</button>
+    <div id="status"></div>
+  </div>
+</div>
+
+<script type="module">
+import { FilesetResolver, HandLandmarker } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
+
+// ---------- setup ----------
+const video = document.getElementById('cam');
+const canvas = document.getElementById('ink');
+const ctx = canvas.getContext('2d');
+const hud = document.getElementById('hud');
+const statusEl = document.getElementById('status');
+let W = 0, H = 0, dpr = 1;
+function resize() {
+  dpr = Math.min(2, window.devicePixelRatio || 1);
+  W = innerWidth; H = innerHeight;
+  canvas.width = W * dpr; canvas.height = H * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+addEventListener('resize', resize); resize();
+
+const F = 3.6;        // perspective focal length (world units)
+// orbit radius: drawings live this far in front of your body (shrinks on narrow windows so the orbit stays visible)
+let D = 1.2, K0 = F / (F - D);
+function fitOrbit() { D = Math.max(0.5, Math.min(1.2, 0.75 * W / H)); K0 = F / (F - D); }
+addEventListener('resize', fitOrbit); fitOrbit();
+const R0 = 0.03;      // base brush radius (world units, 1 = half screen height)
+const MAX_VOICES = 14;
+const rand = (a, b) => a + Math.random() * (b - a);
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+
+const S = {
+  strokes: [],
+  angle: 0, spinVel: 0,
+  scale: 1,
+  style: 'ink',
+  melting: false, meltT: 0,
+  muted: false,
+  hands: {},
+  xHold: 0, xCooldown: 0,
+  transpose: 0, bend: 0,
+};
+
+// ---------- sound params (MIDI-learnable) ----------
+const PARAMS = [
+  { id: 'volume',  name: 'Volumen',    v: 0.75, cc: 7 },
+  { id: 'cutoff',  name: 'Filtro',     v: 0.5,  cc: 74 },
+  { id: 'reso',    name: 'Resonancia', v: 0.08, cc: 71 },
+  { id: 'reverb',  name: 'Reverb',     v: 0.45, cc: 91 },
+  { id: 'vibrato', name: 'Vibrato',    v: 0,    cc: 1 },
+  { id: 'glide',   name: 'Glide',      v: 0.15, cc: 5 },
+  { id: 'spin',    name: 'Giro',       v: 0.5,  cc: 10 },
+  { id: 'size',    name: 'Tamaño',     v: 0.52, cc: 11 },
+];
+const P = Object.fromEntries(PARAMS.map(p => [p.id, p]));
+try {
+  const saved = JSON.parse(localStorage.getItem('tinta-midi-map') || '{}');
+  for (const id in saved) if (P[id]) P[id].cc = saved[id];
+} catch (e) {}
+const saveMap = () => localStorage.setItem('tinta-midi-map', JSON.stringify(Object.fromEntries(PARAMS.map(p => [p.id, p.cc]))));
+const scaleFromV = v => 0.3 * Math.pow(10, v);
+const vFromScale = s => Math.log10(s / 0.3);
+
+function setParam(id, v, fromUser = true) {
+  const p = P[id]; p.v = clamp(v, 0, 1);
+  if (p.input) p.input.value = p.v;
+  if (fromUser && id === 'spin') S.spinVel = (p.v - 0.5) * 14;
+  if (fromUser && id === 'size') S.scale = scaleFromV(p.v);
+}
+
+// ---------- audio ----------
+const A = { ctx: null, midiOut: null };
+function initAudio() {
+  const ac = new (window.AudioContext || window.webkitAudioContext)();
+  A.ctx = ac;
+  A.master = ac.createGain(); A.master.gain.value = 0.9;
+  const comp = ac.createDynamicsCompressor();
+  comp.threshold.value = -18; comp.ratio.value = 4;
+  A.bus = ac.createGain();
+  const len = ac.sampleRate * 3.2, imp = ac.createBuffer(2, len, ac.sampleRate);
+  for (let ch = 0; ch < 2; ch++) {
+    const d = imp.getChannelData(ch);
+    for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 2.6);
+  }
+  const verb = ac.createConvolver(); verb.buffer = imp;
+  A.wet = ac.createGain(); A.wet.gain.value = 0.45;
+  A.bus.connect(comp); A.bus.connect(verb); verb.connect(A.wet); A.wet.connect(comp);
+  comp.connect(A.master); A.master.connect(ac.destination);
+}
+// D minor pentatonic over 4 octaves (MIDI note numbers)
+const SCALE = [];
+for (let o = 0; o < 4; o++) for (const d of [0, 3, 5, 7, 10]) SCALE.push(38 + 12 * o + d);
+const mtof = m => 440 * Math.pow(2, (m - 69) / 12);
+const noteForHeight = h => SCALE[Math.round(clamp(h, 0, 1) * (SCALE.length - 1))];
+
+function makeVoice() {
+  const ac = A.ctx; if (!ac) return null;
+  const v = { phase: Math.random() * 6.28, midiNote: null };
+  v.o1 = ac.createOscillator(); v.o1.type = 'triangle';
+  v.o2 = ac.createOscillator(); v.o2.type = 'sawtooth';
+  v.o3 = ac.createOscillator(); v.o3.type = 'sine';
+  const g2 = ac.createGain(); g2.gain.value = 0.18;
+  const g3 = ac.createGain(); g3.gain.value = 0.35;
+  v.filter = ac.createBiquadFilter(); v.filter.type = 'lowpass'; v.filter.frequency.value = 1400; v.filter.Q.value = 0.8;
+  v.gain = ac.createGain(); v.gain.gain.value = 0;
+  v.pan = ac.createStereoPanner();
+  v.o1.connect(v.filter); v.o2.connect(g2); g2.connect(v.filter); v.o3.connect(g3); g3.connect(v.filter);
+  v.filter.connect(v.gain); v.gain.connect(v.pan); v.pan.connect(A.bus);
+  const t = ac.currentTime;
+  for (const o of [v.o1, v.o2, v.o3]) o.start(t);
+  return v;
+}
+function killVoice(v, time = 1.2, sink = false) {
+  if (!v || v.dead) return; v.dead = true;
+  midiNoteOff(v);
+  const t = A.ctx.currentTime;
+  v.gain.gain.cancelScheduledValues(t);
+  v.gain.gain.setValueAtTime(v.gain.gain.value, t);
+  v.gain.gain.linearRampToValueAtTime(0, t + time);
+  if (sink) {
+    for (const o of [v.o1, v.o2, v.o3]) {
+      o.frequency.cancelScheduledValues(t);
+      o.frequency.setValueAtTime(o.frequency.value, t);
+      o.frequency.exponentialRampToValueAtTime(Math.max(20, o.frequency.value / 5), t + time);
+    }
+    v.filter.frequency.cancelScheduledValues(t);
+    v.filter.frequency.setValueAtTime(v.filter.frequency.value, t);
+    v.filter.frequency.exponentialRampToValueAtTime(120, t + time);
+  }
+  for (const o of [v.o1, v.o2, v.o3]) o.stop(t + time + 0.1);
+  setTimeout(() => { try { v.pan.disconnect(); } catch (e) {} }, (time + 0.3) * 1000);
+}
+
+// ---------- MIDI ----------
+const M = { access: null, learning: null, inSel: 'all' };
+const midiLog = document.getElementById('midiLog');
+function midiNoteOff(v) {
+  if (A.midiOut && v.midiNote != null) A.midiOut.send([0x80, v.midiNote, 0]);
+  v.midiNote = null;
+}
+function onMidi(e) {
+  if (M.inSel !== 'all' && e.target.id !== M.inSel) return;
+  const [st, d1, d2] = e.data, cmd = st & 0xf0;
+  if (cmd === 0xb0) {
+    midiLog.textContent = `CC ${d1} = ${d2}`;
+    if (M.learning) {
+      M.learning.cc = d1; M.learning.ccEl.textContent = d1;
+      M.learning.learnBtn.classList.remove('learning'); M.learning = null; saveMap();
+    }
+    for (const p of PARAMS) if (p.cc === d1) setParam(p.id, d2 / 127);
+  } else if (cmd === 0x90 && d2 > 0) {
+    let t = ((d1 % 12) - 2 + 12) % 12; if (t > 6) t -= 12;   // keys set the tonic (D = 0)
+    S.transpose = t;
+    midiLog.textContent = `Nota ${d1}: tónica ${NOTE_NAMES[d1 % 12]}`;
+  } else if (cmd === 0xe0) {
+    S.bend = (((d2 << 7) | d1) - 8192) / 8192 * 200;      // +-2 semitones in cents
+  }
+}
+const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+function refreshMidiPorts() {
+  const inSel = document.getElementById('midiIn'), outSel = document.getElementById('midiOut');
+  const curIn = inSel.value, curOut = outSel.value;
+  inSel.innerHTML = '<option value="all">Todas</option>';
+  outSel.innerHTML = '<option value="">Ninguna</option>';
+  for (const inp of M.access.inputs.values()) { inSel.add(new Option(inp.name, inp.id)); inp.onmidimessage = onMidi; }
+  for (const out of M.access.outputs.values()) outSel.add(new Option(out.name, out.id));
+  inSel.value = [...inSel.options].some(o => o.value === curIn) ? curIn : 'all';
+  outSel.value = [...outSel.options].some(o => o.value === curOut) ? curOut : '';
+  midiLog.textContent = `${M.access.inputs.size} entradas, ${M.access.outputs.size} salidas`;
+}
+document.getElementById('bMidi').onclick = async () => {
+  if (!navigator.requestMIDIAccess) { midiLog.textContent = 'Este navegador no tiene Web MIDI (usa Chrome o Edge).'; return; }
+  try {
+    M.access = await navigator.requestMIDIAccess();
+    M.access.onstatechange = refreshMidiPorts;
+    refreshMidiPorts();
+  } catch (e) { midiLog.textContent = 'MIDI bloqueado: ' + (e.message || e); }
+};
+document.getElementById('midiIn').onchange = e => { M.inSel = e.target.value; };
+document.getElementById('midiOut').onchange = e => {
+  for (const st of S.strokes) if (st.voice) midiNoteOff(st.voice);
+  A.midiOut = e.target.value ? M.access.outputs.get(e.target.value) : null;
+};
+
+// params UI
+const paramsEl = document.getElementById('params');
+for (const p of PARAMS) {
+  const row = document.createElement('div'); row.className = 'row';
+  row.innerHTML = `<span>${p.name}</span><input type="range" min="0" max="1" step="0.001" value="${p.v}"><span class="cc">${p.cc ?? '-'}</span><button>Learn</button>`;
+  p.input = row.querySelector('input'); p.ccEl = row.querySelector('.cc'); p.learnBtn = row.querySelector('button');
+  p.input.oninput = () => setParam(p.id, +p.input.value);
+  p.learnBtn.onclick = () => {
+    if (M.learning) M.learning.learnBtn.classList.remove('learning');
+    M.learning = M.learning === p ? null : p;
+    if (M.learning) p.learnBtn.classList.add('learning');
+  };
+  paramsEl.appendChild(row);
+}
+
+// ---------- 3D ----------
+// world: x right, y down, z away from camera. Your body sits on the spin axis (origin).
+function project(x, y, z, c, s) {
+  const xr = x * c - z * s, zr = x * s + z * c;
+  const k = F / Math.max(0.3, F + zr);
+  const m = k * H / 2 * S.scale;
+  return { X: W / 2 + xr * m, Y: H / 2 + y * m, k: k * S.scale, zr, xr };
+}
+// screen point -> world point on the orbit, D units in front of your body
+function screenToWorld(sx, sy) {
+  const u = (sx - W / 2) / (H / 2) / S.scale, v = (sy - H / 2) / (H / 2) / S.scale;
+  const xr = u / K0, y = v / K0, zr = -D;
+  const c = Math.cos(S.angle), s = Math.sin(S.angle);
+  return { x: xr * c + zr * s, y, z: -xr * s + zr * c, u: xr };
+}
+
+// ---------- strokes ----------
+function newStroke() {
+  const st = { circles: [], drips: [], voice: makeVoice(), done: false, hue: Math.random() * 360,
+    last: null, r: R0 * 0.3, n: 0, sx: 0, sy: 0, sz: 0, lastU: 0, bow: 0, note: 0 };
+  S.strokes.push(st);
+  const voiced = S.strokes.filter(s => s.voice && !s.voice.dead);
+  if (voiced.length > MAX_VOICES) killVoice(voiced[0].voice, 2.5);
+  return st;
+}
+// kind: 0 = core, 1 = bristle, 2 = splatter
+function pushCircle(st, x, y, z, r, kind = 0) {
+  st.circles.push({ x, y, z, r, y0: y, vy: 0, kind });
+  if (kind === 0) { st.sx += x; st.sy += y; st.sz += z; st.n++; }
+}
+function addPoint(st, sx, sy, t) {
+  const p = screenToWorld(sx, sy);
+  const c = Math.cos(S.angle), s = Math.sin(S.angle);
+  if (!st.last) {
+    st.last = { ...p, t }; st.lastU = p.u;
+    pushCircle(st, p.x, p.y, p.z, st.r);
+    st.note = noteForHeight((1 - p.y) / 2);
+    return;
+  }
+  const L = st.last;
+  const dx = p.x - L.x, dy = p.y - L.y, dz = p.z - L.z;
+  const d = Math.hypot(dx, dy, dz);
+  const dt = Math.max(0.008, (t - L.t) / 1000);
+  const speed = d / dt * K0;
+  const target = R0 * clamp(1.35 - speed * 0.32, 0.28, 1.45);
+  const step = Math.max(0.003, st.r * 0.35);
+  if (d < step * 0.5) { st.last.t = t; return; }
+  const n = Math.ceil(d / step);
+  const du = (dx * c - dz * s) / (d || 1), dv = dy / (d || 1);
+  const pu = -dv, pv = du;
+  const dry = clamp((speed - 1.2) / 3, 0, 0.85);
+  let missed = 0;
+  for (let i = 1; i <= n; i++) {
+    const f = i / n;
+    st.r += (target - st.r) * 0.08;
+    if (st.circles.length < 10) st.r = Math.min(st.r + R0 * 0.07, target);
+    const x = L.x + dx * f, y = L.y + dy * f, z = L.z + dz * f;
+    // core: always keep some so chrome mode stays continuous
+    if (Math.random() > dry * 0.6 || missed > 1) { pushCircle(st, x, y, z, st.r); missed = 0; } else missed++;
+    for (const side of [-1, 1]) {
+      if (Math.random() < dry) continue;
+      const o = side * st.r * rand(0.45, 0.85), rr = st.r * rand(0.3, 0.55);
+      pushCircle(st, x + pu * o * c, y + pv * o, z - pu * o * s, rr, 1);
+    }
+  }
+  if (speed > 2.2 && Math.random() < 0.5) {
+    const k = Math.floor(rand(1, 4));
+    for (let i = 0; i < k; i++) {
+      const o = st.r * rand(1.5, 5) * (Math.random() < .5 ? -1 : 1), a = st.r * rand(-2, 2);
+      pushCircle(st, p.x + pu * o * c + du * a * c, p.y + pv * o + dv * a, p.z - pu * o * s - du * a * s, st.r * rand(0.12, 0.4), 2);
+    }
+  }
+  if (speed < 0.35 && st.r > R0 * 0.8 && Math.random() < 0.04 && st.drips.length < 12) {
+    st.drips.push({ x: p.x, y: p.y, z: p.z, r: st.r * rand(0.25, 0.45), len: 0, max: rand(0.03, 0.15), sp: rand(0.02, 0.07) });
+  }
+  const du2 = Math.abs(p.u - st.lastU) / dt * K0;
+  st.bow += (clamp(du2 / 1.6, 0, 1) - st.bow) * 0.25;
+  st.note = noteForHeight((1 - p.y * K0) / 2);
+  st.lastU = p.u;
+  st.last = { ...p, t };
+}
+function endStroke(st) {
+  st.done = true;
+  if (st.n < 4) {
+    killVoice(st.voice, 0.2);
+    S.strokes.splice(S.strokes.indexOf(st), 1);
+    return;
+  }
+  st.note = noteForHeight((1 - st.sy / st.n * K0) / 2);
+}
+
+function melt() {
+  if (S.melting || !S.strokes.length) return;
+  S.melting = true; S.meltT = 0;
+  for (const st of S.strokes) {
+    for (const c of st.circles) { c.vy = rand(0.02, 0.45); c.streak = Math.random() < 0.18; }
+    for (const d of st.drips) { d.max = 3; d.sp *= 6; }
+    if (st.voice) killVoice(st.voice, 2.6, true);
+  }
+  for (const k in S.hands) S.hands[k].stroke = null;
+}
+function finishMelt() { S.strokes = []; S.melting = false; S.spinVel = 0; }
+
+// ---------- hands ----------
+let landmarker = null, lastVideoTime = -1;
+function lmToScreen(l) {
+  const vw = video.videoWidth || 1280, vh = video.videoHeight || 720;
+  const sc = Math.max(W / vw, H / vh), dw = vw * sc, dh = vh * sc;
+  return { x: (W - dw) / 2 + (1 - l.x) * dw, y: (H - dh) / 2 + l.y * dh };
+}
+function handState(key) {
+  return S.hands[key] || (S.hands[key] = { pinch: false, px: 0, py: 0, stroke: null, trail: [], circling: 0, seen: 0,
+    scaling: false, cHold: 0, exitHold: 0, lastTip: null });
+}
+
+function processHands(res, now, dt) {
+  const lms = res.landmarks || [];
+  const hd = res.handedness || res.handednesses || [];
+  const hands = lms.map((lm, i) => ({ pts: lm.map(lmToScreen), key: hd[i]?.[0]?.categoryName || ('H' + i) }));
+  if (hands.length === 2 && hands[0].key === hands[1].key) { hands[0].key += 'a'; hands[1].key += 'b'; }
+
+  const seenKeys = new Set();
+  let anyCircling = false;
+  for (const h of hands) {
+    const P_ = h.pts, hs = h.state = handState(h.key);
+    seenKeys.add(h.key); hs.seen = now;
+    const size = Math.max(20, dist(P_[0], P_[9]));
+    h.size = size;
+    const gap = dist(P_[4], P_[8]);
+    const ratio = gap / size;
+    const mx = (P_[4].x + P_[8].x) / 2, my = (P_[4].y + P_[8].y) / 2;
+    if (!hs.px) { hs.px = mx; hs.py = my; }
+    hs.px += (mx - hs.px) * 0.55; hs.py += (my - hs.py) * 0.55;
+
+    const idxExt = dist(P_[8], P_[0]) > size * 1.55;
+    const midFold = dist(P_[12], P_[0]) < size * 1.3 && dist(P_[16], P_[0]) < size * 1.25;
+    const midOpen = dist(P_[12], P_[0]) > size * 1.6;
+    const thumbOut = dist(P_[4], P_[5]) / size > 0.7;
+    const tipSpeed = hs.lastTip ? dist(P_[8], hs.lastTip) / Math.max(dt, 0.008) / H : 0;
+    hs.lastTip = { x: P_[8].x, y: P_[8].y };
+
+    // ---- size: hold a "C" still, then open/close it
+    const cShape = idxExt && midFold && thumbOut && ratio > 0.45 && !hs.pinch;
+    if (!hs.scaling) {
+      hs.cHold = (cShape && tipSpeed < 0.5) ? hs.cHold + dt : 0;
+      if (hs.cHold > 0.4) { hs.scaling = true; hs.gap0 = gap; hs.scale0 = S.scale; hs.exitHold = 0; hs.trail.length = 0; }
+    } else {
+      S.scale = clamp(hs.scale0 * Math.pow(gap / Math.max(8, hs.gap0), 1.25), 0.3, 3);
+      P.size.v = vFromScale(S.scale);
+      hs.exitHold = midOpen ? hs.exitHold + dt : 0;
+      if (hs.exitHold > 0.25) hs.scaling = false;
+    }
+    h.scaling = hs.scaling;
+
+    // ---- draw: pinch with hysteresis
+    if (!hs.scaling) {
+      if (!hs.pinch && ratio < 0.3 && !S.melting) {
+        hs.pinch = true; hs.stroke = newStroke(); hs.px = mx; hs.py = my;
+      } else if (hs.pinch && ratio > 0.48) {
+        hs.pinch = false; if (hs.stroke) endStroke(hs.stroke); hs.stroke = null;
+      }
+      if (hs.pinch && hs.stroke) addPoint(hs.stroke, hs.px, hs.py, now);
+    }
+
+    // ---- spin: point with the index and draw circles
+    h.pointing = !hs.pinch && !hs.scaling && idxExt && midFold && ratio > 0.5;
+    if (h.pointing) {
+      hs.trail.push({ x: P_[8].x, y: P_[8].y, t: now });
+      while (hs.trail.length && now - hs.trail[0].t > 650) hs.trail.shift();
+    } else hs.trail.length = 0;
+    hs.circling = 0;
+    if (hs.trail.length > 8) {
+      const T = hs.trail;
+      let cx = 0, cy = 0; for (const q of T) { cx += q.x; cy += q.y; } cx /= T.length; cy /= T.length;
+      let rSum = 0, total = 0, prev = null;
+      for (const q of T) {
+        rSum += Math.hypot(q.x - cx, q.y - cy);
+        const a = Math.atan2(q.y - cy, q.x - cx);
+        if (prev !== null) { let d = a - prev; if (d > Math.PI) d -= 2 * Math.PI; if (d < -Math.PI) d += 2 * Math.PI; total += d; }
+        prev = a;
+      }
+      const meanR = rSum / T.length;
+      if (meanR > H * 0.025 && Math.abs(total) > 2.3) {
+        hs.circling = Math.sign(total); hs.cx = cx; hs.cy = cy; hs.cr = meanR;
+        anyCircling = true;
+        S.spinVel += hs.circling * dt * (0.7 + Math.abs(S.spinVel) * 0.45);
+        S.spinVel = clamp(S.spinVel, -7, 7);
+      }
+    }
+  }
+  for (const k in S.hands) {
+    if (!seenKeys.has(k) && now - S.hands[k].seen > 250) {
+      if (S.hands[k].stroke) endStroke(S.hands[k].stroke);
+      delete S.hands[k];
+    }
+  }
+  if (!anyCircling) S.spinVel *= Math.exp(-0.12 * dt);
+
+  // crossed arms (X): wrists close, fingers of each hand pointing up and outward
+  let crossed = false;
+  if (hands.length >= 2) {
+    let [a, b] = hands; if (a.pts[0].x > b.pts[0].x) [a, b] = [b, a];
+    const hsz = (a.size + b.size) / 2;
+    const wristD = dist(a.pts[0], b.pts[0]);
+    const va = { x: a.pts[9].x - a.pts[0].x, y: a.pts[9].y - a.pts[0].y };
+    const vb = { x: b.pts[9].x - b.pts[0].x, y: b.pts[9].y - b.pts[0].y };
+    const la = Math.hypot(va.x, va.y) || 1, lb = Math.hypot(vb.x, vb.y) || 1;
+    const outward = va.x / la < -0.3 && vb.x / lb > 0.3 && va.y < 0 && vb.y < 0;
+    crossed = wristD < hsz * 2.2 && outward && !a.state.pinch && !b.state.pinch;
+  }
+  S.xCooldown = Math.max(0, S.xCooldown - dt);
+  S.xHold = crossed ? S.xHold + dt : 0;
+  if (S.xHold > 0.35 && S.xCooldown === 0) { melt(); S.xCooldown = 3; S.xHold = 0; }
+  return hands;
+}
+
+// ---------- audio per frame ----------
+let lastCC1 = -1;
+function updateAudio(t) {
+  if (!A.ctx) return;
+  const at = A.ctx.currentTime;
+  A.master.gain.setTargetAtTime(S.muted ? 0 : P.volume.v * 1.2, at, 0.05);
+  A.wet.gain.setTargetAtTime(P.reverb.v, at, 0.05);
+  const cutoffMul = Math.pow(2, (P.cutoff.v - 0.5) * 4);
+  const Q = 0.5 + P.reso.v * 14;
+  const glide = 0.01 + P.glide.v * 0.5;
+  const c = Math.cos(S.angle), s = Math.sin(S.angle);
+  const active = S.strokes.filter(st => st.voice && !st.voice.dead);
+  const norm = 1 / Math.sqrt(Math.max(1, active.length));
+  const w = Math.abs(S.spinVel);
+  for (const st of active) {
+    const v = st.voice, n = Math.max(1, st.n);
+    const p = project(st.sx / n, st.sy / n, st.sz / n, c, s);
+    // the line orbits you, so its sound pans around you
+    v.pan.pan.setTargetAtTime(clamp(p.xr / 1.3, -1, 1), at, 0.03);
+    // in front = bright and present, behind you = dark and distant
+    const front = clamp(0.5 - p.zr / 2.4, 0, 1);
+    v.filter.frequency.setTargetAtTime(clamp((300 + front * 2600) * cutoffMul, 60, 16000), at, 0.05);
+    v.filter.Q.setTargetAtTime(Q, at, 0.05);
+    const trem = 1 - Math.min(0.55, w * 0.12) * 0.5 * (1 + Math.sin(t * (2 + w * 2.2) + v.phase));
+    const vib = Math.sin(t * (3 + w * 1.6) + v.phase) * (Math.min(30, w * 7) + P.vibrato.v * 50) + S.bend;
+    v.o1.detune.setTargetAtTime(vib, at, 0.02);
+    v.o2.detune.setTargetAtTime(6 + vib, at, 0.02);
+    v.o3.detune.setTargetAtTime(vib, at, 0.02);
+    const g = st.done ? 0.085 * norm : (0.05 + st.bow * 0.22);
+    v.gain.gain.setTargetAtTime(g * trem * (0.45 + front * 0.65), at, st.done ? 0.4 : 0.05);
+    const note = st.note + S.transpose, f = mtof(note);
+    v.o1.frequency.setTargetAtTime(f, at, glide);
+    v.o2.frequency.setTargetAtTime(f, at, glide);
+    v.o3.frequency.setTargetAtTime(f * 2, at, glide);
+    if (A.midiOut && v.midiNote !== note) {
+      midiNoteOff(v);
+      A.midiOut.send([0x90, note, st.done ? 70 : 100]); v.midiNote = note;
+    }
+  }
+  if (A.midiOut) {
+    const cc = Math.round(clamp(w / 7, 0, 1) * 127);
+    if (cc !== lastCC1) { A.midiOut.send([0xb0, 1, cc]); lastCC1 = cc; }
+  }
+}
+
+// ---------- rendering ----------
+const TAU = Math.PI * 2;
+function collect(st, c, s, chrome) {
+  const out = [];
+  const grow = chrome ? 1.6 : 1;
+  for (let i = 0; i < st.circles.length; i++) {
+    const q = st.circles[i];
+    if (chrome && q.kind === 1) continue;
+    const p = project(q.x, q.y, q.z, c, s);
+    const R = Math.max(0.4, q.r * p.k * H / 2 * grow);
+    let ty = null;
+    if (S.melting && q.streak && q.y - q.y0 > 0.002) ty = project(q.x, Math.max(q.y0, q.y - 0.22), q.z, c, s).Y;
+    out.push({ X: p.X, Y: p.Y, R, back: p.zr > 0.1, i, ty });
+  }
+  for (const d of st.drips) {
+    const steps = Math.max(1, Math.ceil(d.len / (d.r * 0.4)));
+    for (let j = 0; j <= steps; j++) {
+      const f = j / steps;
+      const p = project(d.x, d.y + d.len * f, d.z, c, s);
+      const bulb = j === steps && d.len > 0.01 ? 1.9 : 1;
+      out.push({ X: p.X, Y: p.Y, R: d.r * (1 - f * 0.45) * bulb * p.k * H / 2 * grow, back: p.zr > 0.1, i: st.circles.length, ty: null });
+    }
+  }
+  return out;
+}
+function circlePath(list, rf = 1, ox = 0, oy = 0) {
+  ctx.beginPath();
+  for (const q of list) {
+    const R = q.R * rf, X = q.X + ox * q.R, Y = q.Y + oy * q.R;
+    if (q.ty !== null && rf === 1) {
+      const Rt = R * 0.28;
+      ctx.moveTo(X + Rt, q.ty); ctx.arc(X, q.ty, Rt, 0, Math.PI, true);
+      ctx.lineTo(X - R, Y); ctx.arc(X, Y, R, Math.PI, 0, true); ctx.closePath();
+    } else { ctx.moveTo(X + R, Y); ctx.arc(X, Y, R, 0, TAU); }
+  }
+}
+function renderInk(list, alpha) {
+  ctx.fillStyle = '#0b0b0c';
+  const back = list.filter(q => q.back), front = list.filter(q => !q.back);
+  ctx.globalAlpha = alpha * 0.35; circlePath(back); ctx.fill();
+  ctx.globalAlpha = alpha * 0.94; circlePath(front); ctx.fill();
+}
+// ---------- liquid chrome (WebGL) ----------
+// 1) every circle is stamped as a soft dome into a height map (max blend, so blobs fuse like liquid)
+// 2) a shader turns the height map into normals and shades it like polished metal with a rainbow film at the edges
+const glc = document.createElement('canvas');
+glc.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;pointer-events:none';
+canvas.before(glc);
+const gl = glc.getContext('webgl', { premultipliedAlpha: true, alpha: true, antialias: false });
+const hcv = document.createElement('canvas');
+const hctx = hcv.getContext('2d', { willReadFrequently: false });
+let HS = 1;
+function makeDome(front) {
+  const c = document.createElement('canvas'); c.width = c.height = 128;
+  const g = c.getContext('2d');
+  const grd = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+  // hemisphere profile h = sqrt(1 - r^2); G channel marks "in front of you"
+  for (const r of [0, .3, .5, .65, .78, .88, .95, 1]) {
+    const h = Math.round(Math.sqrt(1 - r * r) * 255);
+    grd.addColorStop(r, `rgb(${h},${front ? h : 0},0)`);
+  }
+  g.fillStyle = grd; g.fillRect(0, 0, 128, 128);
+  return c;
+}
+const DOME_F = makeDome(true), DOME_B = makeDome(false);
+let glProg = null, glTex = null, glU = {};
+function initGL() {
+  if (!gl) return;
+  const vs = `attribute vec2 p; varying vec2 uv; void main(){ uv = vec2(p.x*.5+.5, .5-p.y*.5); gl_Position = vec4(p,0.,1.); }`;
+  const fs = `precision highp float;
+  varying vec2 uv; uniform sampler2D tex; uniform vec2 px; uniform float t, alpha, tilt;
+  vec3 hue(float x){ return clamp(abs(fract(x + vec3(0., 2./3., 1./3.)) * 6. - 3.) - 1., 0., 1.); }
+  float H(vec2 o){ return texture2D(tex, uv + o * px).r; }
+  void main(){
+    vec4 c = texture2D(tex, uv);
+    float m = smoothstep(.03, .16, c.r);
+    if (m < .002) { gl_FragColor = vec4(0.); return; }
+    // smoothed gradient over two rings (hides 8-bit steps)
+    float gx = (H(vec2(-2.,0.)) - H(vec2(2.,0.))) + .5*(H(vec2(-4.,0.)) - H(vec2(4.,0.)))
+             + .5*((H(vec2(-2.,-2.)) - H(vec2(2.,-2.))) + (H(vec2(-2.,2.)) - H(vec2(2.,2.))));
+    float gy = (H(vec2(0.,2.)) - H(vec2(0.,-2.))) + .5*(H(vec2(0.,4.)) - H(vec2(0.,-4.)))
+             + .5*((H(vec2(-2.,2.)) - H(vec2(-2.,-2.))) + (H(vec2(2.,2.)) - H(vec2(2.,-2.))));
+    vec3 n = normalize(vec3(gx, gy, .32));
+    vec3 r = reflect(vec3(0., 0., -1.), n);
+    float fres = pow(1. - n.z, 1.6);
+    // soft studio environment: dark floor, lilac walls, bright softbox above
+    float y = r.y;
+    vec3 env = mix(vec3(.10,.08,.16), vec3(.58,.54,.80), smoothstep(-.7, .25, y));
+    env = mix(env, vec3(.95,.93,1.), smoothstep(.55, .95, y));
+    env -= .28 * (1. - smoothstep(0., .18, abs(y + .08)));
+    env += vec3(.10,.05,.18) * smoothstep(.2, .9, r.x);
+    vec3 film = hue(fres * 1.3 + r.x * .3 + r.y * .15 + t * .04 + tilt);
+    vec3 col = mix(env, env * .45 + film * .95, smoothstep(.05, .7, fres));
+    float spec = pow(max(dot(r, normalize(vec3(-.45, .65, .6))), 0.), 36.);
+    col += spec * 1.1 + pow(max(dot(r, normalize(vec3(.6, .3, .75))), 0.), 60.) * .4;
+    float front = c.g / max(c.r, .001);
+    float a = m * alpha * mix(.4, 1., clamp(front, 0., 1.));
+    gl_FragColor = vec4(min(col, 1.) * a, a);
+  }`;
+  const sh = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) console.error(gl.getShaderInfoLog(s)); return s; };
+  glProg = gl.createProgram();
+  gl.attachShader(glProg, sh(gl.VERTEX_SHADER, vs)); gl.attachShader(glProg, sh(gl.FRAGMENT_SHADER, fs));
+  gl.linkProgram(glProg); gl.useProgram(glProg);
+  const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+  const loc = gl.getAttribLocation(glProg, 'p'); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+  glTex = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, glTex);
+  for (const [k, v] of [[gl.TEXTURE_MIN_FILTER, gl.LINEAR], [gl.TEXTURE_MAG_FILTER, gl.LINEAR], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]])
+    gl.texParameteri(gl.TEXTURE_2D, k, v);
+  for (const u of ['px', 't', 'alpha', 'tilt']) glU[u] = gl.getUniformLocation(glProg, u);
+}
+initGL();
+function sizeChrome() {
+  HS = Math.min(dpr, 1.5);
+  hcv.width = glc.width = Math.round(W * HS); hcv.height = glc.height = Math.round(H * HS);
+}
+addEventListener('resize', sizeChrome); sizeChrome();
+function beginChrome() {
+  hctx.globalCompositeOperation = 'source-over';
+  hctx.fillStyle = '#000'; hctx.fillRect(0, 0, hcv.width, hcv.height);
+  hctx.globalCompositeOperation = 'lighten';
+}
+function stampChrome(list) {
+  for (const q of list) {
+    const R = q.R * 1.18 * HS;
+    hctx.drawImage(q.back ? DOME_B : DOME_F, q.X * HS - R, q.Y * HS - R, R * 2, R * 2);
+  }
+}
+function endChrome(alpha, t) {
+  if (!glProg) return;
+  gl.viewport(0, 0, glc.width, glc.height);
+  gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
+  gl.bindTexture(gl.TEXTURE_2D, glTex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, hcv);
+  gl.uniform2f(glU.px, 1 / hcv.width, 1 / hcv.height);
+  gl.uniform1f(glU.t, t); gl.uniform1f(glU.alpha, alpha); gl.uniform1f(glU.tilt, S.angle * 0.16);
+  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+}
+function clearChrome() { if (gl) { gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT); } }
+
+function drawCursors(hands) {
+  ctx.globalAlpha = 1;
+  for (const h of hands) {
+    const hs = h.state;
+    ctx.lineWidth = 1.5;
+    if (h.scaling) {
+      const a = h.pts[4], b = h.pts[8];
+      ctx.strokeStyle = 'rgba(255,255,255,.85)';
+      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+      for (const q of [a, b]) { ctx.beginPath(); ctx.arc(q.x, q.y, 6, 0, TAU); ctx.stroke(); }
+      ctx.fillStyle = '#fff'; ctx.font = '600 13px Segoe UI, sans-serif';
+      ctx.fillText('x' + S.scale.toFixed(2), (a.x + b.x) / 2 + 12, (a.y + b.y) / 2);
+      continue;
+    }
+    if (hs.cHold > 0) {
+      ctx.strokeStyle = 'rgba(255,255,255,.7)';
+      ctx.beginPath(); ctx.arc(h.pts[8].x, h.pts[8].y, 12, -Math.PI / 2, -Math.PI / 2 + TAU * Math.min(1, hs.cHold / 0.4)); ctx.stroke();
+    }
+    if (hs.pinch) {
+      ctx.fillStyle = S.style === 'chrome' ? '#ddd4fb' : '#0b0b0c';
+      ctx.beginPath(); ctx.arc(hs.px, hs.py, 5, 0, TAU); ctx.fill();
+    } else {
+      ctx.strokeStyle = 'rgba(255,255,255,.75)';
+      ctx.beginPath(); ctx.arc(hs.px, hs.py, 9, 0, TAU); ctx.stroke();
+    }
+    if (h.pointing) {
+      const tip = h.pts[8];
+      ctx.fillStyle = hs.circling ? '#fff' : 'rgba(255,255,255,.6)';
+      ctx.beginPath(); ctx.arc(tip.x, tip.y, 4, 0, TAU); ctx.fill();
+      if (hs.circling) {
+        ctx.strokeStyle = 'rgba(255,255,255,.45)';
+        ctx.beginPath(); ctx.arc(hs.cx, hs.cy, hs.cr, 0, TAU); ctx.stroke();
+      }
+    }
+  }
+  if (S.xHold > 0) {
+    ctx.strokeStyle = 'rgba(255,255,255,.8)'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(W / 2, 60, 18, -Math.PI / 2, -Math.PI / 2 + TAU * Math.min(1, S.xHold / 0.35)); ctx.stroke();
+  }
+}
+
+let lastT = performance.now(), hands = [], frameN = 0;
+const panelEl = document.getElementById('panel');
+function frame(now) {
+  const dt = Math.min(0.05, (now - lastT) / 1000); lastT = now; frameN++;
+  if (landmarker && video.readyState >= 2 && video.currentTime !== lastVideoTime) {
+    lastVideoTime = video.currentTime;
+    hands = processHands(landmarker.detectForVideo(video, now), now, dt);
+  } else if (!landmarker) hands = [];
+
+  S.angle += S.spinVel * dt;
+
+  for (const st of S.strokes) for (const d of st.drips) if (d.len < d.max) d.len = Math.min(d.max, d.len + d.sp * dt);
+  if (S.melting) {
+    S.meltT += dt;
+    for (const st of S.strokes) for (const q of st.circles) { q.vy += rand(0.2, 1.4) * dt; q.y += q.vy * dt; }
+    if (S.meltT > 2.7) finishMelt();
+  }
+
+  ctx.clearRect(0, 0, W, H);
+  const c = Math.cos(S.angle), s = Math.sin(S.angle);
+  const chrome = S.style === 'chrome';
+  const alpha = S.melting ? Math.max(0, 1 - Math.pow(S.meltT / 2.7, 1.6)) : 1;
+  const t = now / 1000;
+  if (chrome) {
+    beginChrome();
+    for (const st of S.strokes) stampChrome(collect(st, c, s, true));
+    endChrome(alpha, t);
+  } else {
+    if (S.lastChrome) clearChrome();
+    for (const st of S.strokes) renderInk(collect(st, c, s, false), alpha);
+  }
+  S.lastChrome = chrome;
+  drawCursors(hands);
+  updateAudio(t);
+
+  // keep the gesture-driven sliders in sync
+  if (frameN % 6 === 0 && !panelEl.hidden) {
+    if (document.activeElement !== P.spin.input) P.spin.input.value = clamp(S.spinVel / 14 + 0.5, 0, 1);
+    if (document.activeElement !== P.size.input) P.size.input.value = vFromScale(S.scale);
+  }
+  const voices = S.strokes.filter(st => st.voice && !st.voice.dead).length;
+  hud.innerHTML = `<b>trazos</b> ${S.strokes.length} &nbsp; <b>voces</b> ${voices} &nbsp; <b>giro</b> ${(S.spinVel / TAU).toFixed(2)} rps` +
+    ` &nbsp; <b>tamaño</b> x${S.scale.toFixed(2)} &nbsp; <b>tónica</b> ${NOTE_NAMES[(2 + S.transpose + 12) % 12]}` +
+    `<br>pellizco = dibujar · índice en círculos = orbitar · C quieta = tamaño · brazos en X = borrar`;
+  requestAnimationFrame(frame);
+}
+
+// ---------- start ----------
+const startBtn = document.getElementById('start');
+startBtn.onclick = async () => {
+  startBtn.disabled = true;
+  try {
+    initAudio();
+    statusEl.textContent = 'Pidiendo acceso a la cámara...';
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720, facingMode: 'user' }, audio: false });
+    video.srcObject = stream; await video.play();
+    statusEl.textContent = 'Cargando el modelo de manos...';
+    const fileset = await FilesetResolver.forVisionTasks('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm');
+    const opts = (delegate) => ({
+      baseOptions: { modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task', delegate },
+      runningMode: 'VIDEO', numHands: 2,
+      minHandDetectionConfidence: 0.5, minHandPresenceConfidence: 0.5, minTrackingConfidence: 0.5,
+    });
+    try { landmarker = await HandLandmarker.createFromOptions(fileset, opts('GPU')); }
+    catch (e) { landmarker = await HandLandmarker.createFromOptions(fileset, opts('CPU')); }
+    document.getElementById('intro').remove();
+    hud.hidden = false; document.getElementById('tools').hidden = false;
+  } catch (e) {
+    console.error(e);
+    statusEl.textContent = 'No se pudo iniciar: ' + (e.message || e);
+    startBtn.disabled = false;
+  }
+};
+
+const bCam = document.getElementById('bCam'), bMute = document.getElementById('bMute'), bStyle = document.getElementById('bStyle');
+function toggleCam() {
+  video.classList.toggle('hidden');
+  const hidden = video.classList.contains('hidden');
+  bCam.textContent = hidden ? 'Mostrar cámara' : 'Ocultar cámara';
+  document.body.style.background = hidden ? (S.style === 'chrome' ? '#0d0c10' : '#f3efe6') : '#111';
+}
+function toggleMute() { S.muted = !S.muted; bMute.textContent = S.muted ? 'Activar sonido' : 'Silenciar'; }
+function setStyle(st) {
+  S.style = st;
+  bStyle.textContent = 'Estilo: ' + (st === 'chrome' ? 'cromo' : 'tinta');
+  document.querySelectorAll('[data-style]').forEach(b => b.classList.toggle('on', b.dataset.style === st));
+  if (video.classList.contains('hidden')) document.body.style.background = st === 'chrome' ? '#0d0c10' : '#f3efe6';
+}
+bCam.onclick = toggleCam; bMute.onclick = toggleMute;
+bStyle.onclick = () => setStyle(S.style === 'ink' ? 'chrome' : 'ink');
+document.querySelectorAll('[data-style]').forEach(b => b.onclick = () => setStyle(b.dataset.style));
+document.getElementById('bMelt').onclick = melt;
+document.getElementById('bPanel').onclick = () => { panelEl.hidden = !panelEl.hidden; };
+addEventListener('keydown', e => {
+  if (e.target.tagName === 'SELECT' || e.target.tagName === 'INPUT') return;
+  const k = e.key.toLowerCase();
+  if (k === 'x') melt(); else if (k === 'c') toggleCam(); else if (k === 'm') toggleMute();
+  else if (k === 's') bStyle.click(); else if (k === 'p') panelEl.hidden = !panelEl.hidden;
+});
+
+// mouse fallback: drag to draw, wheel to resize
+let mouseStroke = null;
+canvas.addEventListener('pointerdown', e => { if (!S.melting) { mouseStroke = newStroke(); addPoint(mouseStroke, e.clientX, e.clientY, performance.now()); } });
+addEventListener('pointermove', e => { if (mouseStroke) addPoint(mouseStroke, e.clientX, e.clientY, performance.now()); });
+addEventListener('pointerup', () => { if (mouseStroke) { endStroke(mouseStroke); mouseStroke = null; } });
+canvas.addEventListener('wheel', e => { S.scale = clamp(S.scale * Math.exp(-e.deltaY * 0.001), 0.3, 3); P.size.v = vFromScale(S.scale); }, { passive: true });
+window.__tinta = { S, newStroke, addPoint, endStroke, melt, setStyle };
+
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
